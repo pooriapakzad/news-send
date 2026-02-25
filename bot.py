@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import xml.etree.ElementTree as ET
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -11,110 +12,130 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 NEWS_API_KEY = os.getenv('NEWS_API_KEY')
 
-# منابع RSS گسترده فارسی و انگلیسی
-SOURCES = {
-    'ai': 'https://www.zoomit.ir/ai/rss/',
-    'tech': 'https://www.digiato.com/feed',
-    'sport': 'https://www.varzesh3.com/rss/all',
-    'economy': 'https://www.donya-e-eqtesad.com/fa/tiny/news-1/rss',
-    'cinema': 'https://www.zoomg.ir/cinema/rss/',
-    'health': 'https://www.isna.ir/rss/tp/21',
-    'global_tech': 'https://www.theverge.com/rss/index.xml',
-    'global_science': 'https://www.sciencedaily.com/rss/top/science.xml'
+# دیکشنری زبان (برای مدیریت متون ربات)
+STRINGS = {
+    'fa': {
+        'welcome': "✨ **به سوپر ربات خبری خوش آمدید** ✨\n\nزبان فعلی: فارسی 🇮🇷",
+        'lang_btn': "🇺🇸 Switch to English",
+        'ai': "🤖 هوش مصنوعی", 'tech': "💻 تکنولوژی", 'sport': "⚽ ورزش", 'economy': "📈 اقتصاد",
+        'health': "🏥 پزشکی و سلامت", 'cinema': "🎬 سینما و گیم", 'style': "👓 مد و فشن",
+        'prices': "💰 نرخ ارز و طلا", 'random': "🎲 خبر تصادفی", 'search': "🔍 جستجوی پیشرفته",
+        'timer': "⏰ تنظیم تایمر", 'support': "☎️ پشتیبانی", 'loading': "⏳ در حال استخراج اخبار...",
+        'more': "🔗 ادامه مطلب"
+    },
+    'en': {
+        'welcome': "✨ **Welcome to Super News Bot** ✨\n\nCurrent Language: English 🇺🇸",
+        'lang_btn': "🇮🇷 تغییر به فارسی",
+        'ai': "🤖 AI News", 'tech': "💻 Technology", 'sport': "⚽ Sports", 'economy': "📈 Economy",
+        'health': "🏥 Health & Med", 'cinema': "🎬 Movie & Game", 'style': "👓 Fashion & Style",
+        'prices': "💰 Market Rates", 'random': "🎲 Random News", 'search': "🔍 Advanced Search",
+        'timer': "⏰ Set Timer", 'support': "☎️ Support", 'loading': "⏳ Fetching news...",
+        'more': "🔗 Read More"
+    }
 }
 
-def main_menu():
+# منابع خبری (ترکیبی فارسی و انگلیسی)
+SOURCES = {
+    'fa': {
+        'ai': ['https://www.zoomit.ir/ai/rss/', 'https://digiato.com/topic/artificial-intelligence/feed'],
+        'sport': ['https://www.varzesh3.com/rss/all', 'https://www.isna.ir/rss/tp/24'],
+        'tech': ['https://www.digiato.com/feed', 'https://www.zoomit.ir/tech/rss/'],
+        'economy': ['https://www.donya-e-eqtesad.com/fa/tiny/news-1/rss', 'https://www.isna.ir/rss/tp/25'],
+        'health': ['https://www.isna.ir/rss/tp/21', 'https://www.beytoote.com/health/rss/'],
+        'cinema': ['https://www.zoomg.ir/cinema/rss/', 'https://www.filimo.com/shot/feed/'],
+        'style': ['https://www.thefashionista.ir/feed/']
+    },
+    'en': {
+        'ai': ['https://machinelearningmastery.com/feed/', 'https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml'],
+        'sport': ['https://www.espn.com/espn/rss/news', 'https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml'],
+        'tech': ['https://www.theverge.com/rss/index.xml', 'https://www.wired.com/feed/rss'],
+        'economy': ['https://www.economist.com/finance-and-economics/rss.xml', 'https://feeds.a.dj.com/rss/WSJBlogEconomy.xml'],
+        'health': ['https://www.health.harvard.edu/blog/feed', 'https://rss.nytimes.com/services/xml/rss/nyt/Health.xml'],
+        'cinema': ['https://www.hollywoodreporter.com/feed/', 'https://www.empireonline.com/rss/'],
+        'style': ['https://www.vogue.com/feed/rss', 'https://www.gq.com/feed/rss']
+    }
+}
+
+# ذخیره زبان کاربر (در حافظه موقت - برای دائمی شدن نیاز به دیتابیس است)
+user_lang = {}
+
+def get_keyboard(chat_id):
+    lang = user_lang.get(chat_id, 'fa')
+    s = STRINGS[lang]
     keyboard = [
-        [InlineKeyboardButton("🤖 هوش مصنوعی", callback_data='get_ai'), InlineKeyboardButton("💻 تکنولوژی", callback_data='get_tech')],
-        [InlineKeyboardButton("⚽ ورزش ۳", callback_data='get_sport'), InlineKeyboardButton("📈 اقتصاد", callback_data='get_economy')],
-        [InlineKeyboardButton("🎬 سینما/گیم", callback_data='get_cinema'), InlineKeyboardButton("🏥 پزشکی", callback_data='get_health')],
-        [InlineKeyboardButton("🌐 Tech (EN)", callback_data='get_global_tech'), InlineKeyboardButton("🔬 Science (EN)", callback_data='get_global_science')],
-        [InlineKeyboardButton("⏰ تنظیم ارسال خودکار (تایمر)", callback_data='setup_auto')],
+        [InlineKeyboardButton(s['ai'], callback_data='get_ai'), InlineKeyboardButton(s['tech'], callback_data='get_tech')],
+        [InlineKeyboardButton(s['sport'], callback_data='get_sport'), InlineKeyboardButton(s['economy'], callback_data='get_economy')],
+        [InlineKeyboardButton(s['health'], callback_data='get_health'), InlineKeyboardButton(s['cinema'], callback_data='get_cinema')],
+        [InlineKeyboardButton(s['style'], callback_data='get_style'), InlineKeyboardButton(s['prices'], callback_data='get_prices')],
+        [InlineKeyboardButton(s['random'], callback_data='get_random'), InlineKeyboardButton(s['search'], callback_data='get_search')],
+        [InlineKeyboardButton(s['timer'], callback_data='setup_auto'), InlineKeyboardButton(s['support'], callback_data='support_menu')],
+        [InlineKeyboardButton(s['lang_btn'], callback_data='switch_lang')]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 **به مرکز خبر پیشرفته خوش آمدید**\n\nیک دسته را انتخاب کنید تا ۱۰ خبر آخر را دریافت کنید یا تایمر را فعال کنید:", 
-                                   reply_markup=main_menu(), parse_mode='Markdown')
-
-async def send_10_news(message_obj, url):
-    try:
-        response = requests.get(url, timeout=10)
-        root = ET.fromstring(response.content)
-        items = root.findall('.//item')[:10] # دریافت ۱۰ خبر آخر
-        
-        if not items: # برخی فیدها از تگ entry استفاده می‌کنند (Atom)
-            items = root.findall('{http://www.w3.org/2005/Atom}entry')[:10]
-
-        for item in items:
-            title = item.find('title').text if item.find('title') is not None else "بدون تیتر"
-            link = item.find('link').text if item.find('link') is not None else item.find('{http://www.w3.org/2005/Atom}link').attrib['href']
-            
-            msg = f"🔴 **{title.strip()}**\n\n🔗 [ادامه مطلب]({link})"
-            await message_obj.reply_text(msg, parse_mode='Markdown')
-    except Exception as e:
-        await message_obj.reply_text("❌ خطا در لود اخبار. منبع ممکن است موقتاً در دسترس نباشد.")
+    cid = update.effective_chat.id
+    if cid not in user_lang: user_lang[cid] = 'fa'
+    await update.message.reply_text(STRINGS[user_lang[cid]]['welcome'], reply_markup=get_keyboard(cid), parse_mode='Markdown')
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    cid = query.message.chat_id
+    lang = user_lang.get(cid, 'fa')
     await query.answer()
     
-    if query.data.startswith('get_'):
-        cat = query.data.split('_')[1]
-        await query.message.reply_text(f"⏳ در حال استخراج ۱۰ خبر برتر در حوزه {cat}...")
-        await send_10_news(query.message, SOURCES[cat])
+    data = query.data
+    
+    if data == 'switch_lang':
+        user_lang[cid] = 'en' if lang == 'fa' else 'fa'
+        await query.edit_message_text(STRINGS[user_lang[cid]]['welcome'], reply_markup=get_keyboard(cid), parse_mode='Markdown')
         
-    elif query.data == 'setup_auto':
-        await query.message.reply_text("⏱ **تنظیم تایمر:**\n\nبرای فعالسازی ارسال خودکار، این دستور را در چت بفرستید:\n`set 10 ai`\n\n(بجای ۱۰ عدد دقیقه و بجای ai موضوع را بنویسید)")
+    elif data.startswith('get_'):
+        cat = data.split('_')[1]
+        await query.message.reply_text(STRINGS[lang]['loading'])
+        
+        if cat == 'prices':
+            await fetch_and_send(query.message, 'https://www.donya-e-eqtesad.com/fa/tiny/news-1/rss', limit=5, lang=lang)
+        elif cat == 'random':
+            rand_cat = random.choice(list(SOURCES[lang].keys()))
+            await fetch_and_send(query.message, random.choice(SOURCES[lang][rand_cat]), limit=1, lang=lang)
+        elif cat == 'search':
+            await query.message.reply_text("🔍 Type your keyword to search...")
+        else:
+            for url in SOURCES[lang].get(cat, []):
+                await fetch_and_send(query.message, url, limit=5, lang=lang)
 
-# مکانیزم ارسال خودکار (Job Queue)
-async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    await send_10_news(context.bot, SOURCES.get(job.data['topic'], SOURCES['tech']))
+    elif data == 'support_menu':
+        kb = [[InlineKeyboardButton("📢 Channel", url="https://t.me/YourChannel"), InlineKeyboardButton("👤 Admin", url="https://t.me/YourID")]]
+        await query.message.reply_text("💎 **Contact Support:**", reply_markup=InlineKeyboardMarkup(kb))
 
-async def set_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def fetch_and_send(message_obj, url, limit=10, lang='fa'):
     try:
-        # دستور: set 10 ai
-        args = context.args
-        due = float(args[0]) * 60 # تبدیل دقیقه به ثانیه
-        topic = args[1]
-        
-        if topic not in SOURCES:
-            await update.message.reply_text("❌ موضوع نامعتبر! موضوعات موجود: ai, tech, sport, economy, cinema, health")
-            return
+        res = requests.get(url, timeout=10)
+        root = ET.fromstring(res.content)
+        items = root.findall('.//item')[:limit]
+        for item in items:
+            title = item.find('title').text
+            link = item.find('link').text
+            btn_text = STRINGS[lang]['more']
+            await message_obj.reply_text(f"🔴 **{title.strip()}**\n\n🔗 [{btn_text}]({link})", parse_mode='Markdown')
+    except:
+        pass
 
-        # حذف تایمر قبلی اگر وجود داشت
-        job_removed = remove_job_if_exists(str(update.effective_chat.id), context)
-        
-        context.job_queue.run_repeating(auto_news_job, interval=due, first=10, 
-                                        chat_id=update.effective_chat.id, 
-                                        name=str(update.effective_chat.id), 
-                                        data={'topic': topic})
-
-        await update.message.reply_text(f"✅ ارسال خودکار فعال شد!\nهر {args[0]} دقیقه آخرین اخبار {topic} ارسال می‌شود.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("💡 روش استفاده: `set 10 ai` (برای ارسال هر ۱۰ دقیقه)")
-
-def remove_job_if_exists(name, context):
-    current_jobs = context.job_queue.get_jobs_by_name(name)
-    if not current_jobs:
-        return False
-    for job in current_jobs:
-        job.schedule_removal()
-    return True
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text
+    # جستجوی هوشمند بر اساس زبان ربات
+    lang = user_lang.get(update.effective_chat.id, 'fa')
+    search_url = f"https://news.google.com/rss/search?q={query}&hl={'fa' if lang=='fa' else 'en'}&ceid={'IR:fa' if lang=='fa' else 'US:en'}"
+    await update.message.reply_text(f"🔎 Searching for '{query}'...")
+    await fetch_and_send(update.message, search_url, limit=5, lang=lang)
 
 def main():
-    # فعالسازی JobQueue برای تایمر
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("set", set_timer)) # هندلر برای دستور تایمر
     app.add_handler(CallbackQueryHandler(button_handler))
-    
-    # جستجوی جهانی با NewsAPI
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: send_10_news(u.message, f"https://newsapi.org/v2/everything?q={u.message.text}&apiKey={NEWS_API_KEY}")))
-
-    print("Bot is up and running with Auto-Post...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    print("Bot is Running in Professional Multi-Lang Mode...")
     app.run_polling()
 
 if __name__ == '__main__':
